@@ -81,17 +81,17 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ---- Gemini Request ----
+// ---- Gemini Request (fixed) ----
 async function getGeminiResponse(conversation) {
   // Convert conversation to Gemini API format
-  const contents = conversation.map(msg => ({
+  const messages = conversation.map(msg => ({
     author: msg.role,
     content: [{ type: 'text', text: msg.text }]
   }));
 
   const response = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiKey}`,
-    { conversation: contents }
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateMessage?key=${geminiKey}`,
+    { prompt: { messages } }
   );
 
   // Return first candidate text

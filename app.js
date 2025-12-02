@@ -97,17 +97,18 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ---- Gemini Request (FIXED) ----
+// ---- Gemini Request (FIXED MODEL VERSION) ----
 async function getGeminiResponse(conversation) {
   try {
     const contents = conversation.map(msg => ({
+      // Your local 'assistant' role is correctly mapped to the API's 'model' role
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.text }]
     }));
 
-    // Switched to 'gemini-pro' which is the standard stable model
+    // *** FIX IS HERE: Changed 'gemini-pro' to 'gemini-1.0-pro' ***
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent?key=${geminiKey}`,
       {
         contents: contents
       },
@@ -119,6 +120,7 @@ async function getGeminiResponse(conversation) {
     return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response text found.";
 
   } catch (error) {
+    // Note: The error details you provided (the 404) are logged here.
     console.error("Gemini API Error details:", error.response?.data || error.message);
     return "Sorry, I am having trouble connecting to the AI right now.";
   }

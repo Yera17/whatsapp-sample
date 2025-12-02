@@ -27,7 +27,7 @@ function saveMemory(memory) {
 }
 
 // ---- WHATSAPP WEBHOOK VERIFICATION ----
-app.get('/', (req, res) => {
+app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const challenge = req.query['hub.challenge'];
   const token = req.query['hub.verify_token'];
@@ -41,11 +41,11 @@ app.get('/', (req, res) => {
 });
 
 // ---- WHATSAPP WEBHOOK POST HANDLER ----
-app.post('/', async (req, res) => {
+app.post('/webhook', async (req, res) => {
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
   console.log(`\n\nWebhook received ${timestamp}\n`);
   console.log(JSON.stringify(req.body, null, 2));
-  res.sendStatus(200); // Respond quickly
+  res.sendStatus(200); // respond quickly
 
   const entry = req.body.entry?.[0];
   const changes = entry?.changes?.[0];
@@ -53,7 +53,7 @@ app.post('/', async (req, res) => {
 
   if (!message) return;
 
-  const from = message.from;
+  const from = message.from; // WhatsApp sender
   const text = message.text?.body || '';
 
   // Load memory
@@ -77,13 +77,13 @@ app.post('/', async (req, res) => {
     await sendWhatsAppMessage(from, aiReply);
 
   } catch (err) {
-    console.error('Error handling message:', err);
+    console.error('Error handling message:', err.response?.data || err.message);
   }
 });
 
 // ---- Gemini Request ----
 async function getGeminiResponse(conversation) {
-  // Build contents in Gemini format
+  // Convert conversation to Gemini API format
   const contents = conversation.map(msg => ({
     author: msg.role,
     content: [{ type: 'text', text: msg.text }]
@@ -94,31 +94,35 @@ async function getGeminiResponse(conversation) {
     { conversation: contents }
   );
 
-  // Extract text from first candidate
+  // Return first candidate text
   return response.data?.candidates?.[0]?.content?.[0]?.text || "Sorry, I couldn't respond.";
 }
 
 // ---- WhatsApp Send API ----
 async function sendWhatsAppMessage(to, body) {
-  await axios.post(
-    `https://graph.facebook.com/v20.0/${phoneId}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      text: { body }
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${whatsappToken}`,
-        "Content-Type": "application/json"
+  try {
+    const res = await axios.post(
+      `https://graph.facebook.com/v20.0/${phoneId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${whatsappToken}`,
+          "Content-Type": "application/json"
+        }
       }
-    }
-  );
+    );
+    console.log("Message sent:", res.data);
+  } catch (err) {
+    console.error("WhatsApp send error:", err.response?.data || err.message);
+  }
 }
 
-// Optional root route
-app.get('/', (req, res) => {
-  res.send("Server is running");
-});
+// Optional root route for sanity check
+app.get('/', (req, res) => res.send("Server is running"));
 
 app.listen(port, () => console.log(`Listening on port ${port}`));

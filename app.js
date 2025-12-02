@@ -110,14 +110,24 @@ async function getGeminiResponse(conversation) {
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
       {
-        contents: contents
+        contents: contents,
+        generationConfig: {
+          maxOutputTokens: 1024  // Approximately 4096 characters
+        }
       },
       {
         headers: { 'Content-Type': 'application/json' }
       }
     );
 
-    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response text found.";
+    let responseText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response text found.";
+    
+    // Ensure response doesn't exceed 4096 characters
+    if (responseText.length > 4096) {
+      responseText = responseText.substring(0, 4096);
+    }
+    
+    return responseText;
 
   } catch (error) {
     // Note: The error details you provided (the 404) are logged here.

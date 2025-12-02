@@ -108,7 +108,7 @@ async function getGeminiResponse(conversation) {
 
     // *** FIX IS HERE: Changed 'gemini-pro' to 'gemini-1.0-pro' ***
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
       {
         contents: contents
       },

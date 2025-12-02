@@ -100,17 +100,14 @@ app.post('/webhook', async (req, res) => {
 // ---- Gemini Request (FIXED) ----
 async function getGeminiResponse(conversation) {
   try {
-    // Transform memory format to Gemini API format
-    // Map 'assistant' (your memory) -> 'model' (Gemini API)
     const contents = conversation.map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.text }]
     }));
 
-    // Use generateContent (not generateMessage)
-    // Using gemini-1.5-flash as it is faster and cheaper for chatbots
+    // Switched to 'gemini-pro' which is the standard stable model
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiKey}`,
       {
         contents: contents
       },
@@ -119,11 +116,10 @@ async function getGeminiResponse(conversation) {
       }
     );
 
-    // Parse the response
-    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "I'm sorry, I couldn't generate a response.";
+    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response text found.";
 
   } catch (error) {
-    console.error("Gemini API Error:", error.response?.data || error.message);
+    console.error("Gemini API Error details:", error.response?.data || error.message);
     return "Sorry, I am having trouble connecting to the AI right now.";
   }
 }

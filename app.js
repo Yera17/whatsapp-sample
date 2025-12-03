@@ -265,7 +265,7 @@ Output only the complete HTML code starting with <!DOCTYPE html> and ending with
       model: "gemini-3-pro-preview",
       contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
       config: {
-        maxOutputTokens: 8192,
+        maxOutputTokens: 20000,
         temperature: 0.7
       }
     });

@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
 const app = express();
 
@@ -11,6 +12,18 @@ const verifyToken = process.env.VERIFY_TOKEN;
 const whatsappToken = process.env.WHATSAPP_TOKEN;
 const phoneId = process.env.PHONE_ID;
 const geminiKey = process.env.GEMINI_KEY;
+
+// Server URL for game links
+const SERVER_URL = process.env.SERVER_URL || 'https://whatsapp-sample-6906.onrender.com';
+
+// ---- Games Folder Setup ----
+const gamesFolder = path.join(__dirname, 'games');
+if (!fs.existsSync(gamesFolder)) {
+  fs.mkdirSync(gamesFolder, { recursive: true });
+}
+
+// Serve static game files
+app.use('/games', express.static(gamesFolder));
 
 // ---- Phone Number Mapping ----
 // Maps sender numbers to response numbers
@@ -146,31 +159,73 @@ async function handleButtonClick(from, responseTo, buttonId) {
     switch (buttonId) {
       case 'create_game':
         // Handle Create Game action
-        memory[from].push({ role: 'user', text: '[Selected: Create Game]' });
+        await sendWhatsAppMessage(responseTo, `🎮 Creating your game... Please wait!`);
         
-        const gamePrompt = memory[from].filter(m => m.role === 'user').slice(-2, -1)[0]?.text || '';
-        const gameResponse = await getGeminiResponse([
-          ...memory[from],
-          { role: 'user', text: `Create a fun interactive game based on: "${gamePrompt}". Be creative and engaging!` }
-        ]);
+        // Get the user's last message as game prompt
+        const userMessages = memory[from].filter(m => m.role === 'user' && !m.text.startsWith('['));
+        const gamePrompt = userMessages[userMessages.length - 1]?.text || 'a fun simple game';
         
-        memory[from].push({ role: 'assistant', text: gameResponse });
-        saveMemory(memory);
-        await sendWhatsAppMessage(responseTo, `🎮 *Creating your game!*\n\n${gameResponse}`);
+        console.log(`Creating game based on: "${gamePrompt}"`);
+        
+        // Generate HTML5 game
+        const gameHtml = await generateGameHTML(gamePrompt);
+        
+        if (gameHtml) {
+          // Generate unique filename
+          const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const gameFileName = `${gameId}.html`;
+          const gamePath = path.join(gamesFolder, gameFileName);
+          
+          // Save game file
+          fs.writeFileSync(gamePath, gameHtml);
+          
+          // Create game URL
+          const gameUrl = `${SERVER_URL}/games/${gameFileName}`;
+          
+          // Save to user's library
+          memory[from].push({ 
+            role: 'user', 
+            text: `[Created Game: ${gamePrompt}]` 
+          });
+          memory[from].push({ 
+            role: 'assistant', 
+            text: `Game created: ${gameUrl}`,
+            gameData: { id: gameId, prompt: gamePrompt, url: gameUrl, createdAt: new Date().toISOString() }
+          });
+          saveMemory(memory);
+          
+          // Send game link to user
+          await sendWhatsAppMessage(responseTo, 
+            `🎮 *Your game is ready!*\n\n` +
+            `📝 Based on: "${gamePrompt}"\n\n` +
+            `🔗 Play here:\n${gameUrl}\n\n` +
+            `Have fun! Send /start to create another game.`
+          );
+        } else {
+          await sendWhatsAppMessage(responseTo, `😔 Sorry, couldn't create the game. Please try again with a different description.`);
+        }
         break;
 
       case 'library':
-        // Handle Library action
-        memory[from].push({ role: 'user', text: '[Selected: Library]' });
+        // Handle Library action - show user's created games
+        const games = memory[from]
+          .filter(m => m.gameData)
+          .map(m => m.gameData);
         
-        const libraryResponse = await getGeminiResponse([
-          ...memory[from],
-          { role: 'user', text: 'Show me what\'s in my library. List any games or content we\'ve created together.' }
-        ]);
-        
-        memory[from].push({ role: 'assistant', text: libraryResponse });
-        saveMemory(memory);
-        await sendWhatsAppMessage(responseTo, `📚 *Your Library*\n\n${libraryResponse}`);
+        if (games.length === 0) {
+          await sendWhatsAppMessage(responseTo, 
+            `📚 *Your Library*\n\n` +
+            `You haven't created any games yet!\n\n` +
+            `Send a game idea and then /start to create one.`
+          );
+        } else {
+          let libraryMsg = `📚 *Your Library* (${games.length} games)\n\n`;
+          games.slice(-10).forEach((game, i) => {
+            libraryMsg += `${i + 1}. ${game.prompt}\n🔗 ${game.url}\n\n`;
+          });
+          libraryMsg += `Send /start to create a new game!`;
+          await sendWhatsAppMessage(responseTo, libraryMsg);
+        }
         break;
 
       default:
@@ -179,6 +234,68 @@ async function handleButtonClick(from, responseTo, buttonId) {
   } catch (err) {
     console.error('Error handling button click:', err.response?.data || err.message);
     await sendWhatsAppMessage(responseTo, "Sorry, something went wrong. Please try again.");
+  }
+}
+
+// ---- Generate HTML5 Game with Gemini ----
+async function generateGameHTML(gamePrompt) {
+  try {
+    const systemPrompt = `You are an expert HTML5 game developer. Create a complete, self-contained HTML5 game based on the user's request.
+
+REQUIREMENTS:
+- Output ONLY the HTML code, no explanations or markdown
+- Must be a single HTML file with embedded CSS and JavaScript
+- Must be mobile-friendly (touch controls) and work on all screen sizes
+- Must be visually appealing with good colors and styling
+- Include a title, instructions, and game area
+- Add a "Play Again" button
+- Make it fun and engaging!
+- Use canvas or DOM-based game mechanics
+- Include score tracking if applicable
+
+The game should be based on: "${gamePrompt}"
+
+Output only the complete HTML code starting with <!DOCTYPE html> and ending with </html>.`;
+
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+      {
+        contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
+        generationConfig: {
+          maxOutputTokens: 8192,
+          temperature: 0.7
+        }
+      },
+      {
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+
+    let gameCode = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    // Clean up the response - extract HTML if wrapped in markdown
+    if (gameCode.includes('```html')) {
+      gameCode = gameCode.split('```html')[1].split('```')[0];
+    } else if (gameCode.includes('```')) {
+      gameCode = gameCode.split('```')[1].split('```')[0];
+    }
+    
+    // Ensure it starts with DOCTYPE
+    gameCode = gameCode.trim();
+    if (!gameCode.toLowerCase().startsWith('<!doctype')) {
+      // Try to find the start of HTML
+      const doctypeIndex = gameCode.toLowerCase().indexOf('<!doctype');
+      if (doctypeIndex !== -1) {
+        gameCode = gameCode.substring(doctypeIndex);
+      }
+    }
+    
+    console.log(`Generated game HTML (${gameCode.length} chars)`);
+    return gameCode;
+
+  } catch (error) {
+    console.error("Game generation error:", error.response?.data || error.message);
+    return null;
   }
 }
 
@@ -193,7 +310,7 @@ async function getGeminiResponse(conversation) {
 
     // *** FIX IS HERE: Changed 'gemini-pro' to 'gemini-1.0-pro' ***
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro:generateContent?key=${geminiKey}`,
       {
         contents: contents,
         generationConfig: {

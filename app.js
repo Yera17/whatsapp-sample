@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { GoogleGenAI } = require('@google/genai');
 const app = express();
 
 app.use(express.json());
@@ -12,6 +13,9 @@ const verifyToken = process.env.VERIFY_TOKEN;
 const whatsappToken = process.env.WHATSAPP_TOKEN;
 const phoneId = process.env.PHONE_ID;
 const geminiKey = process.env.GEMINI_KEY;
+
+// Initialize Google Gen AI SDK (New Syntax)
+const ai = new GoogleGenAI({ apiKey: geminiKey });
 
 // Server URL for game links
 const SERVER_URL = process.env.SERVER_URL || 'https://whatsapp-sample-6906.onrender.com';
@@ -257,21 +261,16 @@ The game should be based on: "${gamePrompt}"
 
 Output only the complete HTML code starting with <!DOCTYPE html> and ending with </html>.`;
 
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiKey}`,
-      {
-        contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
-        generationConfig: {
-          maxOutputTokens: 8192,
-          temperature: 0.7
-        }
-      },
-      {
-        headers: { 'Content-Type': 'application/json' }
+    const response = await ai.models.generateContent({
+      model: "gemini-3-pro-preview",
+      contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
+      config: {
+        maxOutputTokens: 65536,
+        temperature: 0.7
       }
-    );
+    });
 
-    let gameCode = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    let gameCode = response.text || '';
     
     // Clean up the response - extract HTML if wrapped in markdown
     if (gameCode.includes('```html')) {
@@ -294,37 +293,31 @@ Output only the complete HTML code starting with <!DOCTYPE html> and ending with
     return gameCode;
 
   } catch (error) {
-    console.error("Game generation error:", error.response?.data || error.message);
+    console.error("Game generation error:", error);
     return null;
   }
 }
 
-// ---- Gemini Request (FIXED MODEL VERSION) ----
+// ---- Gemini Request (Gemini 3 Pro) ----
 async function getGeminiResponse(conversation) {
   try {
+    // Convert conversation format to SDK format
     const contents = conversation.map(msg => ({
-      // Your local 'assistant' role is correctly mapped to the API's 'model' role
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.text }]
     }));
 
-    // *** FIX IS HERE: Using gemini-1.5-pro for high quality chat responses ***
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiKey}`,
-      {
-        contents: contents,
-        generationConfig: {
-          maxOutputTokens: 1024  // Approximately 4096 characters
-        }
-      },
-      {
-        headers: { 'Content-Type': 'application/json' }
+    const response = await ai.models.generateContent({
+      model: "gemini-3-pro-preview",
+      contents: contents,
+      config: {
+        maxOutputTokens: 1024,
       }
-    );
-
-    let responseText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response text found.";
+    });
     
-    // Ensure response doesn't exceed 4096 characters
+    let responseText = response.text || "No response text found.";
+    
+    // Ensure response doesn't exceed 4096 characters (WhatsApp limit)
     if (responseText.length > 4096) {
       responseText = responseText.substring(0, 4096);
     }
@@ -332,8 +325,7 @@ async function getGeminiResponse(conversation) {
     return responseText;
 
   } catch (error) {
-    // Note: The error details you provided (the 404) are logged here.
-    console.error("Gemini API Error details:", error.response?.data || error.message);
+    console.error("Gemini API Error details:", error);
     return "Sorry, I am having trouble connecting to the AI right now.";
   }
 }

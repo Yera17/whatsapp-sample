@@ -15,8 +15,8 @@ const geminiKey = process.env.GEMINI_KEY;
 // ---- Phone Number Mapping ----
 // Maps sender numbers to response numbers
 const phoneMapping = {
-  '777784392573': '787784392573',
-  '777767465901': '787767465901'
+  '77784392573': '787784392573',
+  '77767465901': '787767465901'
 };
 
 function getResponseNumber(senderNumber) {

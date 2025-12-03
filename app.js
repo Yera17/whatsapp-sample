@@ -262,7 +262,7 @@ The game should be based on: "${gamePrompt}"
 Output only the complete HTML code starting with <!DOCTYPE html> and ending with </html>.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-pro",
+      model: "gemini-2.5-pro",
       contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
       config: {
         maxOutputTokens: 8192,
@@ -298,7 +298,7 @@ Output only the complete HTML code starting with <!DOCTYPE html> and ending with
   }
 }
 
-// ---- Gemini Request (Gemini 1.5 Pro) ----
+// ---- Gemini Request (Gemini 2.5 Pro) ----
 async function getGeminiResponse(conversation) {
   try {
     // Convert conversation format to SDK format
@@ -308,7 +308,7 @@ async function getGeminiResponse(conversation) {
     }));
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-pro",
+      model: "gemini-2.5-pro",
       contents: contents,
       config: {
         maxOutputTokens: 1024,

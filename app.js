@@ -258,7 +258,7 @@ The game should be based on: "${gamePrompt}"
 Output only the complete HTML code starting with <!DOCTYPE html> and ending with </html>.`;
 
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
       {
         contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
         generationConfig: {
@@ -310,7 +310,7 @@ async function getGeminiResponse(conversation) {
 
     // *** FIX IS HERE: Changed 'gemini-pro' to 'gemini-1.0-pro' ***
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
       {
         contents: contents,
         generationConfig: {

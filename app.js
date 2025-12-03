@@ -12,6 +12,17 @@ const whatsappToken = process.env.WHATSAPP_TOKEN;
 const phoneId = process.env.PHONE_ID;
 const geminiKey = process.env.GEMINI_KEY;
 
+// ---- Phone Number Mapping ----
+// Maps sender numbers to response numbers
+const phoneMapping = {
+  '777784392573': '787784392573',
+  '777767465901': '787767465901'
+};
+
+function getResponseNumber(senderNumber) {
+  return phoneMapping[senderNumber] || senderNumber;
+}
+
 // ---- Load / Save JSON memory ----
 const memoryFile = 'memory.json';
 
@@ -62,12 +73,27 @@ app.post('/webhook', async (req, res) => {
   const value = changes?.value;
   const message = value?.messages?.[0];
 
-  // Check if it's a text message
-  if (!message || message.type !== 'text') return;
+  if (!message) return;
 
   const from = message.from; // WhatsApp sender ID
-  const text = message.text?.body || '';
+  const responseTo = getResponseNumber(from); // Get mapped response number
 
+  console.log(`From: ${from} → Response to: ${responseTo}`);
+
+  // Handle interactive button replies
+  if (message.type === 'interactive') {
+    const buttonReply = message.interactive?.button_reply;
+    if (buttonReply) {
+      console.log(`User (${from}) clicked button: ${buttonReply.id} - ${buttonReply.title}`);
+      await handleButtonClick(from, responseTo, buttonReply.id);
+      return;
+    }
+  }
+
+  // Handle text messages
+  if (message.type !== 'text') return;
+
+  const text = message.text?.body || '';
   console.log(`User (${from}): ${text}`);
 
   // 2. Load memory
@@ -77,25 +103,84 @@ app.post('/webhook', async (req, res) => {
   // 3. Append user message to history
   memory[from].push({ role: 'user', text });
 
+  // 4. Save memory
+  saveMemory(memory);
+
   try {
-    // 4. Call Gemini AI with history
-    const aiReply = await getGeminiResponse(memory[from]);
+    // Check if user sent "/start" command
+    if (text.trim().toLowerCase() === '/start') {
+      // Send interactive buttons
+      await sendInteractiveButtons(
+        responseTo,
+        `Hey! Welcome to Prompt2Play 🎮\n\nWhat would you like to do?`,
+        `Choose an option below`,
+        [
+          { id: 'create_game', title: 'Create Game' },
+          { id: 'library', title: 'Library' }
+        ]
+      );
+    } else {
+      // Regular message - process with Gemini AI
+      const aiReply = await getGeminiResponse(memory[from]);
+      console.log(`Gemini Reply: ${aiReply}`);
 
-    console.log(`Gemini Reply: ${aiReply}`);
+      // Append AI reply to history
+      memory[from].push({ role: 'assistant', text: aiReply });
+      saveMemory(memory);
 
-    // 5. Append AI reply to history
-    memory[from].push({ role: 'assistant', text: aiReply });
-
-    // 6. Save memory to file
-    saveMemory(memory);
-
-    // 7. Send reply back to WhatsApp
-    await sendWhatsAppMessage(from, aiReply);
+      // Send reply back to WhatsApp
+      await sendWhatsAppMessage(responseTo, aiReply);
+    }
 
   } catch (err) {
     console.error('Error in processing loop:', err.response?.data || err.message);
   }
 });
+
+// ---- Handle Button Click ----
+async function handleButtonClick(from, responseTo, buttonId) {
+  const memory = loadMemory();
+  memory[from] = memory[from] || [];
+
+  try {
+    switch (buttonId) {
+      case 'create_game':
+        // Handle Create Game action
+        memory[from].push({ role: 'user', text: '[Selected: Create Game]' });
+        
+        const gamePrompt = memory[from].filter(m => m.role === 'user').slice(-2, -1)[0]?.text || '';
+        const gameResponse = await getGeminiResponse([
+          ...memory[from],
+          { role: 'user', text: `Create a fun interactive game based on: "${gamePrompt}". Be creative and engaging!` }
+        ]);
+        
+        memory[from].push({ role: 'assistant', text: gameResponse });
+        saveMemory(memory);
+        await sendWhatsAppMessage(responseTo, `🎮 *Creating your game!*\n\n${gameResponse}`);
+        break;
+
+      case 'library':
+        // Handle Library action
+        memory[from].push({ role: 'user', text: '[Selected: Library]' });
+        
+        const libraryResponse = await getGeminiResponse([
+          ...memory[from],
+          { role: 'user', text: 'Show me what\'s in my library. List any games or content we\'ve created together.' }
+        ]);
+        
+        memory[from].push({ role: 'assistant', text: libraryResponse });
+        saveMemory(memory);
+        await sendWhatsAppMessage(responseTo, `📚 *Your Library*\n\n${libraryResponse}`);
+        break;
+
+      default:
+        await sendWhatsAppMessage(responseTo, "Unknown option selected.");
+    }
+  } catch (err) {
+    console.error('Error handling button click:', err.response?.data || err.message);
+    await sendWhatsAppMessage(responseTo, "Sorry, something went wrong. Please try again.");
+  }
+}
 
 // ---- Gemini Request (FIXED MODEL VERSION) ----
 async function getGeminiResponse(conversation) {
@@ -157,6 +242,51 @@ async function sendWhatsAppMessage(to, body) {
     // console.log("Message sent successfully");
   } catch (err) {
     console.error("WhatsApp send error:", err.response?.data || err.message);
+  }
+}
+
+// ---- WhatsApp Interactive Reply Buttons ----
+async function sendInteractiveButtons(to, bodyText, footerText, buttons) {
+  try {
+    // Build buttons array (max 3 buttons allowed by WhatsApp)
+    const buttonObjects = buttons.slice(0, 3).map(btn => ({
+      type: "reply",
+      reply: {
+        id: btn.id,
+        title: btn.title.substring(0, 20) // Max 20 characters for button title
+      }
+    }));
+
+    const res = await axios.post(
+      `https://graph.facebook.com/v20.0/${phoneId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: {
+            text: bodyText.substring(0, 1024) // Max 1024 characters
+          },
+          footer: {
+            text: footerText.substring(0, 60) // Max 60 characters
+          },
+          action: {
+            buttons: buttonObjects
+          }
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${whatsappToken}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+    console.log("Interactive buttons sent successfully");
+  } catch (err) {
+    console.error("WhatsApp interactive buttons error:", err.response?.data || err.message);
   }
 }
 

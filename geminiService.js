@@ -1,14 +1,17 @@
 const { GoogleGenAI } = require("@google/genai");
 
 // Initialize the SDK
-// NOTE: In a production environment, never expose API keys on the client side.
-// This should technically be proxied through a backend, but for this demo, we use the env var directly.
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_KEY });
 
-// System prompt for the Game Generator
-const GAME_GENERATOR_SYSTEM_INSTRUCTION = `
+const SYSTEM_INSTRUCTION = `
 You are an expert game developer and creative coder named "ChatJam".
 Your goal is to create simple, fun, and interactive single-file HTML5 games based on user requests.
+
+**Context & Persona:**
+- You are popular in a network that includes Dutch students from "Het Amsterdamsche Studenten Corps (ASC)", specifically the disput "Aegis".
+- If the user speaks Dutch or mentions "Aegis", "Vo", "Dispuut", or "Ontgroening", use appropriate student slang and themes (beer, tradition, fraternity rivalry).
+- If creating games for groups, incentivize "Multiplayer" mechanics (e.g., "Pass the phone", "Tap fastest", or "Sync start").
+- **SHOPPING & BRANDS**: You can now create "Branded Games" for e-commerce. (e.g., "Nike Sneaker Creator", "IKEA Furniture Tetris", "Bol.com Package Catch"). These should be simple but highlight a brand or product discovery mechanic.
 
 **CRITICAL FORMATTING RULES:**
 1. **NO THINKING PROCESS**: Do NOT output your internal reasoning, "Thinking Process:", "Analysis:", or any step-by-step planning. The user should ONLY see the final natural language response and the JSON code block. Start your response directly with the friendly text.
@@ -146,96 +149,211 @@ Every game MUST include a fullscreen toggle button. Follow these rules:
    - The button should be visible but not obstruct gameplay
 `;
 
-const CHAT_SYSTEM_INSTRUCTION = `
-You are "ChatJam" - a WhatsApp bot that creates HTML5 games instantly.
-
-RULES:
-- Keep ALL responses under 3 sentences. This is WhatsApp, be brief!
-- If user wants to create a game, tell them to send /start
-- If user describes a game idea, tell them to send /start first to begin creation
-- Be friendly but extremely concise
-- Never explain how to code or build games step-by-step
-- Never offer to "help design" or "brainstorm" - just direct to /start
-
-Example good response: "Cool idea! 🎮 Send /start to create your game!"
-`;
-
 /**
- * Generates a full HTML5 game based on the user's prompt.
- * Uses the 'gemini-3-pro-preview' model for superior coding and reasoning capabilities.
+ * Send a message to Gemini with full support for:
+ * - Conversation history
+ * - Image attachments
+ * - Game code context (for remixing)
+ * 
+ * @param {string} prompt - The user's message
+ * @param {Array} history - Conversation history with format [{role: 'user'|'model', parts: [{text: string}]}]
+ * @param {string} [imageUrl] - Optional URL of an attached image
+ * @param {string} [contextGameCode] - Optional game code for remix/modify requests
+ * @returns {Promise<{text: string, game?: Object}>}
  */
-const generateGameCode = async (userPrompt) => {
+const sendMessageToGemini = async (prompt, history = [], imageUrl = null, contextGameCode = null) => {
   try {
+    const modelId = "gemini-2.5-pro";
+
+    // Transform history for the API
+    const formattedHistory = history.map(h => ({
+      role: h.role === 'user' ? 'user' : 'model',
+      parts: h.parts
+    }));
+
+    const currentParts = [];
+
+    // Handle Image Attachment
+    if (imageUrl) {
+      try {
+        const imageResp = await fetch(imageUrl);
+        const imageBuffer = await imageResp.arrayBuffer();
+        const base64String = Buffer.from(imageBuffer).toString('base64');
+        const mimeType = imageResp.headers.get('content-type') || 'image/jpeg';
+
+        // 1. Add image for multimodal understanding
+        currentParts.push({
+          inlineData: {
+            data: base64String,
+            mimeType: mimeType
+          }
+        });
+
+        // 2. Add system note so the coder knows the URL to use in the HTML
+        currentParts.push({
+          text: `[System Note: The user attached an image available at URL: "${imageUrl}". If the user asks to use this image in the game, you can embed it using this URL in an <img> tag or as a background.]`
+        });
+
+      } catch (e) {
+        console.error("Failed to process attached image", e);
+      }
+    }
+
+    // Handle Remix Context
+    if (contextGameCode) {
+      currentParts.push({
+        text: `[System Note: The user wants to REMIX or MODIFY an existing game. Here is the source code of the game they are referring to. Use this as the base for your new code generation:\n\n${contextGameCode}\n\n]`
+      });
+    }
+
+    // Add text prompt
+    if (prompt) {
+      currentParts.push({ text: prompt });
+    } else if (!imageUrl && !contextGameCode) {
+      // Fallback if empty
+      currentParts.push({ text: "..." });
+    }
+
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-pro', // Using Pro model for complex coding tasks
+      model: modelId,
       contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: `Create a complete HTML5 game based on this description: "${userPrompt}"` }
-          ]
-        }
+        ...formattedHistory,
+        { role: 'user', parts: currentParts }
       ],
       config: {
-        systemInstruction: GAME_GENERATOR_SYSTEM_INSTRUCTION,
+        systemInstruction: SYSTEM_INSTRUCTION,
         temperature: 0.7,
         maxOutputTokens: 20000,
       }
     });
 
-    let code = response.text || '';
+    let responseText = response.text || "";
 
-    // Cleanup: Remove markdown backticks if the model ignores the instruction
-    if (code.startsWith('```html')) {
-      code = code.replace(/^```html/, '').replace(/```$/, '');
-    } else if (code.startsWith('```')) {
-      code = code.replace(/^```/, '').replace(/```$/, '');
+    // CLEANUP: Strip out "Thinking Process" if it leaked
+    // This regex matches "Thinking Process:" or similar headers, and removes everything until a double newline followed by normal text or JSON
+    responseText = responseText.replace(/^(?:\s*[\*_]*Thinking Process[\*_]*:|Thinking:|Analysis:).*?(\n\n(?![0-9])|(?=Here is|Sure|Okay|Here's))/s, "").trim();
+    // Fallback simple cleaner for standard leaks
+    responseText = responseText.replace(/Thinking Process:[\s\S]*?\n\n/gi, "").trim();
+
+    // --- ROBUST PARSING LOGIC START ---
+    let jsonString = null;
+    let cleanText = responseText;
+
+    // Attempt 1: Standard Markdown Code Block (```json ... ```)
+    const backtickMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (backtickMatch) {
+      jsonString = backtickMatch[1];
+      cleanText = responseText.replace(backtickMatch[0], "").trim();
+    } else {
+      // Attempt 2: Triple Single Quotes ('''json ... ''') - Handling the reported bug
+      const quoteMatch = responseText.match(/'''(?:json)?\s*([\s\S]*?)\s*'''/i);
+      if (quoteMatch) {
+        jsonString = quoteMatch[1];
+        cleanText = responseText.replace(quoteMatch[0], "").trim();
+      } else {
+        // Attempt 3: Look for raw JSON object if it starts and ends with brackets and contains "code"
+        // This captures cases where the model forgets markdown entirely but sends valid JSON
+        const openBrace = responseText.indexOf('{');
+        const closeBrace = responseText.lastIndexOf('}');
+        if (openBrace !== -1 && closeBrace !== -1 && closeBrace > openBrace) {
+          const potentialJson = responseText.substring(openBrace, closeBrace + 1);
+          // Heuristic check to ensure it's likely our game JSON
+          if (potentialJson.includes('"code"') && potentialJson.includes('"title"')) {
+            jsonString = potentialJson;
+            cleanText = responseText.replace(potentialJson, "").trim();
+          }
+        }
+      }
     }
 
-    return code.trim();
+    if (jsonString) {
+      try {
+        const gameData = JSON.parse(jsonString);
+        return {
+          text: cleanText || "Game ready! 🎮 Do you want to publish this to the network so others can play?",
+          game: {
+            title: gameData.title,
+            previewDescription: gameData.description,
+            code: gameData.code,
+            isMultiplayer: gameData.isMultiplayer || false,
+            plays: 0,
+            isPublic: false
+          }
+        };
+      } catch (e) {
+        console.error("Failed to parse game JSON", e);
+        // Fallback: If parsing fails but we found a block, we still return text.
+        return { text: responseText };
+      }
+    }
+    // --- ROBUST PARSING LOGIC END ---
+
+    return { text: responseText };
+
   } catch (error) {
-    console.error("Gemini Game Generation Error:", error);
-    throw new Error("Failed to generate game. Please try again.");
+    console.error("Gemini API Error:", error);
+    return { text: "Sorry, I encountered an error while processing your request." };
   }
 };
 
 /**
- * Handles the conversational aspect of the app.
- * Uses 'gemini-2.5-flash' for low latency responses.
+ * Transcribe audio using Gemini's multimodal capabilities
  * 
- * @param {Array} history - Conversation history from memory.json with format [{role: 'user'|'assistant', text: string}]
- * @param {string} newMessage - The new user message to send
- * @returns {Promise<string>} - The AI response text
+ * @param {string} base64Audio - Base64 encoded audio data
+ * @param {string} mimeType - MIME type of the audio (e.g., 'audio/webm', 'audio/ogg')
+ * @returns {Promise<string>} - Transcribed text
  */
-const sendChatMessage = async (history, newMessage) => {
+const transcribeAudio = async (base64Audio, mimeType) => {
   try {
-    // Convert memory.json format to Gemini SDK format
-    // memory.json uses: { role: 'user'|'assistant', text: string }
-    // Gemini SDK uses: { role: 'user'|'model', parts: [{ text: string }] }
-    const chatHistory = history
-      .filter(msg => msg.role !== 'system')
-      .map(msg => ({
-        role: msg.role === 'assistant' ? 'model' : msg.role,
-        parts: [{ text: msg.text }]
-      }));
+    const modelId = "gemini-2.5-flash";
 
-    const chat = ai.chats.create({
-      model: 'gemini-2.5-flash',
-      history: chatHistory,
-      config: {
-        systemInstruction: CHAT_SYSTEM_INSTRUCTION,
+    const response = await ai.models.generateContent({
+      model: modelId,
+      contents: {
+        parts: [
+          { inlineData: { mimeType, data: base64Audio } },
+          { text: "Transcribe this audio exactly." }
+        ]
       }
     });
 
-    const result = await chat.sendMessage({ message: newMessage });
-    return result.text || "I'm not sure what to say.";
+    return response.text || "";
   } catch (error) {
-    console.error("Gemini Chat Error:", error);
-    throw new Error("Failed to send message.");
+    console.error("Transcription Error:", error);
+    return "";
   }
 };
 
+/**
+ * Simple wrapper for generating a game from a single prompt (backward compatible)
+ * 
+ * @param {string} userPrompt - The game description
+ * @returns {Promise<string>} - The generated HTML game code
+ */
+const generateGameCode = async (userPrompt) => {
+  const result = await sendMessageToGemini(
+    `Create a complete HTML5 game based on this description: "${userPrompt}"`
+  );
+  
+  if (result.game && result.game.code) {
+    return result.game.code;
+  }
+  
+  // Fallback: return raw text if no game was parsed
+  let code = result.text || '';
+  
+  // Cleanup: Remove markdown backticks if present
+  if (code.startsWith('```html')) {
+    code = code.replace(/^```html/, '').replace(/```$/, '');
+  } else if (code.startsWith('```')) {
+    code = code.replace(/^```/, '').replace(/```$/, '');
+  }
+  
+  return code.trim();
+};
+
 module.exports = {
-  generateGameCode,
-  sendChatMessage
+  sendMessageToGemini,
+  transcribeAudio,
+  generateGameCode
 };

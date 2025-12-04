@@ -2,7 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { generateGameCode, sendChatMessage } = require('./geminiService');
+const { generateGameCode, sendMessageToGemini } = require('./geminiService');
 const app = express();
 
 app.use(express.json());
@@ -344,8 +344,19 @@ async function getGeminiResponse(conversation) {
     const lastMessage = conversation[conversation.length - 1];
     const history = conversation.slice(0, -1);
     
-    // Pass history from memory.json to the Gemini service
-    let responseText = await sendChatMessage(history, lastMessage.text);
+    // Convert memory.json format to Gemini SDK format
+    // memory.json uses: { role: 'user'|'assistant', text: string }
+    // Gemini SDK uses: { role: 'user'|'model', parts: [{ text: string }] }
+    const formattedHistory = history
+      .filter(msg => msg.role !== 'system')
+      .map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : msg.role,
+        parts: [{ text: msg.text }]
+      }));
+    
+    // Pass history and message to the Gemini service
+    const result = await sendMessageToGemini(lastMessage.text, formattedHistory);
+    let responseText = result.text;
     
     // Ensure response doesn't exceed 4096 characters (WhatsApp limit)
     if (responseText.length > 4096) {

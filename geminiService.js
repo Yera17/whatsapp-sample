@@ -50,6 +50,100 @@ DO NOT use triple single quotes ('''). ONLY use triple backticks (\`\`\`).
 
 **Image Handling:**
 - If the user attaches an image, use the provided URL in the game (background, sprite, or texture).
+
+**FULLSCREEN IMPLEMENTATION (CRITICAL):**
+Every game MUST include a fullscreen toggle button. Follow these rules:
+
+1. **Meta Tags (REQUIRED in <head>):**
+   \`\`\`html
+   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+   <meta name="apple-mobile-web-app-capable" content="yes">
+   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+   <meta name="mobile-web-app-capable" content="yes">
+   \`\`\`
+
+2. **CSS for Fullscreen Mode:**
+   \`\`\`css
+   html, body {
+     margin: 0;
+     padding: 0;
+     overflow: hidden;
+     width: 100%;
+     height: 100%;
+     /* iOS safe area support */
+     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+   }
+   
+   /* Fullscreen button styling */
+   .fullscreen-btn {
+     position: fixed;
+     top: 10px;
+     right: 10px;
+     z-index: 9999;
+     padding: 10px 15px;
+     background: rgba(0,0,0,0.7);
+     color: white;
+     border: none;
+     border-radius: 8px;
+     cursor: pointer;
+     font-size: 16px;
+     touch-action: manipulation;
+   }
+   .fullscreen-btn:hover { background: rgba(0,0,0,0.9); }
+   \`\`\`
+
+3. **Fullscreen JavaScript (REQUIRED):**
+   \`\`\`javascript
+   // Detect iOS (Safari doesn't support Fullscreen API for non-video)
+   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+   
+   function toggleFullscreen() {
+     if (isIOS) {
+       // iOS: Show instruction to add to home screen
+       alert('📱 For fullscreen on iOS:\\n\\n1. Tap the Share button (square with arrow)\\n2. Select "Add to Home Screen"\\n3. Open from your home screen for fullscreen!');
+       return;
+     }
+     
+     const elem = document.documentElement;
+     if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+       // Enter fullscreen - try standard first, then webkit (Safari desktop)
+       if (elem.requestFullscreen) {
+         elem.requestFullscreen();
+       } else if (elem.webkitRequestFullscreen) {
+         elem.webkitRequestFullscreen(); // Safari desktop
+       }
+     } else {
+       // Exit fullscreen
+       if (document.exitFullscreen) {
+         document.exitFullscreen();
+       } else if (document.webkitExitFullscreen) {
+         document.webkitExitFullscreen();
+       }
+     }
+   }
+   
+   // Update button text based on fullscreen state
+   function updateFullscreenBtn() {
+     const btn = document.getElementById('fullscreenBtn');
+     const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+     btn.textContent = isFullscreen ? '⛶ Exit' : '⛶ Fullscreen';
+   }
+   
+   document.addEventListener('fullscreenchange', updateFullscreenBtn);
+   document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+   \`\`\`
+
+4. **Button HTML (place after <body> tag):**
+   \`\`\`html
+   <button id="fullscreenBtn" class="fullscreen-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+   \`\`\`
+
+5. **IMPORTANT NOTES:**
+   - Desktop browsers: Use Fullscreen API (works on Chrome, Firefox, Edge, Safari desktop)
+   - Android browsers: Fullscreen API works normally
+   - iOS Safari: Fullscreen API does NOT work for web pages. Show user-friendly instructions to "Add to Home Screen" instead
+   - Always include webkit prefixes for Safari compatibility
+   - The button should be visible but not obstruct gameplay
 `;
 
 const CHAT_SYSTEM_INSTRUCTION = `
@@ -68,7 +162,7 @@ Example good response: "Cool idea! 🎮 Send /start to create your game!"
 
 /**
  * Generates a full HTML5 game based on the user's prompt.
- * Uses the 'gemini-2.5-pro' model for superior coding and reasoning capabilities.
+ * Uses the 'gemini-3-pro-preview' model for superior coding and reasoning capabilities.
  */
 const generateGameCode = async (userPrompt) => {
   try {

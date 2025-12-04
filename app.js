@@ -181,10 +181,7 @@ app.post('/webhook', async (req, res) => {
       // Check if user wants to cancel
       if (text.trim().toLowerCase() === 'cancel' || text.trim().toLowerCase() === '/cancel') {
         clearUserState(from);
-        await sendWhatsAppMessage(responseTo, 
-          `❌ *Game creation cancelled*\n\n` +
-          `No problem! Send /start whenever you want to try again.`
-        );
+        await sendWhatsAppMessage(responseTo, `❌ Cancelled. Send /start to try again.`);
         return;
       }
       
@@ -222,16 +219,12 @@ async function handleButtonClick(from, responseTo, buttonId) {
         
         // Ask user for game description
         await sendWhatsAppMessage(responseTo, 
-          `🎮 *Let's create your game!*\n\n` +
-          `Describe the game you want to play. Be creative!\n\n` +
-          `*Examples:*\n` +
-          `• "A space shooter where I dodge asteroids"\n` +
-          `• "Snake game with power-ups"\n` +
-          `• "Platform jumper with coins to collect"\n` +
-          `• "Flappy bird but underwater"\n` +
-          `• "Racing game with obstacles"\n\n` +
-          `📝 *Send your game idea now:*\n` +
-          `_(or type "cancel" to go back)_`
+          `🎮 *Describe your game!*\n\n` +
+          `Examples:\n` +
+          `• Space shooter\n` +
+          `• Snake with power-ups\n` +
+          `• Flappy bird underwater\n\n` +
+          `Send your idea now 👇`
         );
         break;
 
@@ -243,16 +236,13 @@ async function handleButtonClick(from, responseTo, buttonId) {
         
         if (games.length === 0) {
           await sendWhatsAppMessage(responseTo, 
-            `📚 *Your Library*\n\n` +
-            `You haven't created any games yet!\n\n` +
-            `Send /start to create your first game!`
+            `📚 *Your Library*\n\nNo games yet! Send /start to create one.`
           );
         } else {
-          let libraryMsg = `📚 *Your Library* (${games.length} games)\n\n`;
-          games.slice(-10).forEach((game, i) => {
-            libraryMsg += `${i + 1}. ${game.prompt}\n🔗 ${game.url}\n\n`;
+          let libraryMsg = `📚 *Your Library* (${games.length})\n\n`;
+          games.slice(-5).forEach((game, i) => {
+            libraryMsg += `${i + 1}. ${game.prompt.substring(0, 30)}...\n${game.url}\n\n`;
           });
-          libraryMsg += `Send /start to create a new game!`;
           await sendWhatsAppMessage(responseTo, libraryMsg);
         }
         break;
@@ -276,10 +266,7 @@ async function handleGameGeneration(from, responseTo, gamePrompt) {
   
   // Send confirmation and generating message
   await sendWhatsAppMessage(responseTo, 
-    `🎮 *Got it!*\n\n` +
-    `Creating: "${gamePrompt}"\n\n` +
-    `⏳ This takes 30-60 seconds for a high-quality game...\n` +
-    `Please wait while I build something awesome! 🚀`
+    `🎮 Creating your game...\n\n⏳ Please wait ~30-60 sec`
   );
   
   console.log(`Creating game based on: "${gamePrompt}"`);
@@ -312,31 +299,22 @@ async function handleGameGeneration(from, responseTo, gamePrompt) {
       });
       saveMemory(memory);
       
-      // Send game link to user with tips
+      // Send game link to user
       await sendWhatsAppMessage(responseTo, 
         `🎮 *Your game is ready!*\n\n` +
-        `📝 "${gamePrompt}"\n\n` +
-        `🔗 *Play here:*\n${gameUrl}\n\n` +
-        `💡 *Tips:*\n` +
-        `• Tap ⛶ for fullscreen mode\n` +
-        `• Works on mobile & desktop\n` +
-        `• Touch controls on mobile, keyboard on desktop\n\n` +
-        `Send /start to create another game! 🎉`
+        `📝 Based on: "${gamePrompt}"\n\n` +
+        `🔗 Play here:\n${gameUrl}\n\n` +
+        `Have fun! Send /start to create another game.`
       );
     } else {
       await sendWhatsAppMessage(responseTo, 
-        `😔 *Oops!*\n\n` +
-        `Couldn't create that game. Please try:\n` +
-        `• A simpler game concept\n` +
-        `• More specific description\n\n` +
-        `Send /start to try again!`
+        `😔 Couldn't create that game.\n\nTry a simpler idea. Send /start`
       );
     }
   } catch (err) {
     console.error('Error in game generation:', err.response?.data || err.message);
     await sendWhatsAppMessage(responseTo, 
-      `😔 *Something went wrong*\n\n` +
-      `Please send /start to try again.`
+      `😔 Something went wrong. Send /start to try again.`
     );
   }
 }

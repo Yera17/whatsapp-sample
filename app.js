@@ -168,7 +168,7 @@ app.post('/webhook', async (req, res) => {
       // Send interactive buttons
       await sendInteractiveButtons(
         responseTo,
-        `Hey! Welcome to Prompt2Play 🎮\n\nWhat would you like to do?`,
+        `Hey! Welcome to ChatJam 🎮\n\nWhat would you like to do?`,
         `Choose an option below`,
         [
           { id: 'create_game', title: 'Create Game' },

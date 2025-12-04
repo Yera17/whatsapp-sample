@@ -190,15 +190,19 @@ app.post('/webhook', async (req, res) => {
     }
     else {
       // Regular message - process with Gemini AI
-      const aiReply = await getGeminiResponse(memory[from]);
-      console.log(`Gemini Reply: ${aiReply}`);
-
-      // Append AI reply to history
-      memory[from].push({ role: 'assistant', text: aiReply });
-      saveMemory(memory);
-
-      // Send reply back to WhatsApp
-      await sendWhatsAppMessage(responseTo, aiReply);
+      const aiResult = await getGeminiResponse(memory[from]);
+      console.log(`Gemini Reply: ${aiResult.text}`);
+      
+      // Check if Gemini generated a game
+      if (aiResult.game && aiResult.game.code) {
+        // Game was generated - save and publish it
+        await handleDirectGameGeneration(from, responseTo, text, aiResult);
+      } else {
+        // Regular text response
+        memory[from].push({ role: 'assistant', text: aiResult.text });
+        saveMemory(memory);
+        await sendWhatsAppMessage(responseTo, aiResult.text);
+      }
     }
 
   } catch (err) {
@@ -319,6 +323,53 @@ async function handleGameGeneration(from, responseTo, gamePrompt) {
   }
 }
 
+// ---- Handle Direct Game Generation (from regular chat) ----
+async function handleDirectGameGeneration(from, responseTo, userPrompt, aiResult) {
+  const memory = loadMemory();
+  memory[from] = memory[from] || [];
+  
+  console.log(`Direct game generated from chat: "${userPrompt.substring(0, 50)}..."`);
+  
+  try {
+    const gameCode = aiResult.game.code;
+    const gameTitle = aiResult.game.title || 'Untitled Game';
+    
+    // Generate unique filename
+    const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const gameFileName = `${gameId}.html`;
+    const gamePath = path.join(gamesFolder, gameFileName);
+    
+    // Save game file
+    fs.writeFileSync(gamePath, gameCode);
+    
+    // Create game URL
+    const gameUrl = `${SERVER_URL}/games/${gameFileName}`;
+    
+    // Save to user's library
+    memory[from].push({ 
+      role: 'assistant', 
+      text: `Game created: ${gameUrl}`,
+      gameData: { id: gameId, prompt: userPrompt, url: gameUrl, title: gameTitle, createdAt: new Date().toISOString() }
+    });
+    saveMemory(memory);
+    
+    // Send AI response text first (if any), then the game link
+    let responseMessage = aiResult.text ? `${aiResult.text}\n\n` : '';
+    responseMessage += `🎮 *${gameTitle}*\n\n` +
+      `🔗 Play here:\n${gameUrl}\n\n` +
+      `Have fun! Ask me for another game anytime.`;
+    
+    await sendWhatsAppMessage(responseTo, responseMessage);
+    
+  } catch (err) {
+    console.error('Error saving direct game:', err.message);
+    // Fallback: just send the text response
+    memory[from].push({ role: 'assistant', text: aiResult.text });
+    saveMemory(memory);
+    await sendWhatsAppMessage(responseTo, aiResult.text);
+  }
+}
+
 // ---- Generate HTML5 Game with Gemini ----
 async function generateGameHTML(gamePrompt) {
   try {
@@ -337,6 +388,7 @@ async function generateGameHTML(gamePrompt) {
 
 // ---- Gemini Chat Response ----
 // Takes full conversation from memory.json and sends to Gemini service
+// Returns { text: string, game?: { code, title, previewDescription, isMultiplayer } }
 async function getGeminiResponse(conversation) {
   try {
     // conversation comes from memory.json: [{role: 'user'|'assistant', text: string}, ...]
@@ -363,11 +415,15 @@ async function getGeminiResponse(conversation) {
       responseText = responseText.substring(0, 4096);
     }
     
-    return responseText;
+    // Return full result including game data if present
+    return { 
+      text: responseText,
+      game: result.game || null
+    };
 
   } catch (error) {
     console.error("Gemini API Error:", error.message);
-    return "Sorry, I am having trouble connecting to the AI right now.";
+    return { text: "Sorry, I am having trouble connecting to the AI right now.", game: null };
   }
 }
 

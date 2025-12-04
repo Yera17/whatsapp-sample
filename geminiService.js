@@ -39,12 +39,12 @@ Example good response: "Cool idea! 🎮 Send /start to create your game!"
 
 /**
  * Generates a full HTML5 game based on the user's prompt.
- * Uses the 'gemini-3-pro-preview' model for superior coding and reasoning capabilities.
+ * Uses the 'gemini-2.5-pro' model for superior coding and reasoning capabilities.
  */
 const generateGameCode = async (userPrompt) => {
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview', // Using Pro model for complex coding tasks
+      model: 'gemini-2.5-pro', // Using Pro model for complex coding tasks
       contents: [
         {
           role: 'user',

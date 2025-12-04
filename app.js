@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { generateGameCode, sendChatMessage } = require('./geminiService');
 const app = express();
 
 app.use(express.json());
@@ -11,7 +12,6 @@ const port = process.env.PORT || 3000;
 const verifyToken = process.env.VERIFY_TOKEN;
 const whatsappToken = process.env.WHATSAPP_TOKEN;
 const phoneId = process.env.PHONE_ID;
-const geminiKey = process.env.GEMINI_KEY;
 
 // Server URL for game links
 const SERVER_URL = process.env.SERVER_URL || 'https://whatsapp-sample-6906.onrender.com';
@@ -38,6 +38,7 @@ function getResponseNumber(senderNumber) {
 
 // ---- Load / Save JSON memory ----
 const memoryFile = 'memory.json';
+const userStateFile = 'user_state.json';
 
 function loadMemory() {
   try {
@@ -57,6 +58,45 @@ function saveMemory(memory) {
   } catch (err) {
     console.error("Error saving memory:", err);
   }
+}
+
+// ---- User State Management ----
+// Tracks user's current action state (e.g., awaiting game description)
+function loadUserState() {
+  try {
+    if (fs.existsSync(userStateFile)) {
+      return JSON.parse(fs.readFileSync(userStateFile, 'utf8'));
+    }
+    return {};
+  } catch (err) {
+    console.error("Error loading user state:", err);
+    return {};
+  }
+}
+
+function saveUserState(state) {
+  try {
+    fs.writeFileSync(userStateFile, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.error("Error saving user state:", err);
+  }
+}
+
+function getUserState(userId) {
+  const states = loadUserState();
+  return states[userId] || null;
+}
+
+function setUserState(userId, state) {
+  const states = loadUserState();
+  states[userId] = state;
+  saveUserState(states);
+}
+
+function clearUserState(userId) {
+  const states = loadUserState();
+  delete states[userId];
+  saveUserState(states);
 }
 
 // ---- WHATSAPP WEBHOOK VERIFICATION ----
@@ -122,6 +162,9 @@ app.post('/webhook', async (req, res) => {
   try {
     // Check if user sent "/start" command
     if (text.trim().toLowerCase() === '/start') {
+      // Clear any pending state
+      clearUserState(from);
+      
       // Send interactive buttons
       await sendInteractiveButtons(
         responseTo,
@@ -132,7 +175,23 @@ app.post('/webhook', async (req, res) => {
           { id: 'library', title: 'Library' }
         ]
       );
-    } else {
+    } 
+    // Check if user is awaiting game description
+    else if (getUserState(from) === 'awaiting_game_description') {
+      // Check if user wants to cancel
+      if (text.trim().toLowerCase() === 'cancel' || text.trim().toLowerCase() === '/cancel') {
+        clearUserState(from);
+        await sendWhatsAppMessage(responseTo, 
+          `❌ *Game creation cancelled*\n\n` +
+          `No problem! Send /start whenever you want to try again.`
+        );
+        return;
+      }
+      
+      // User provided game description - generate the game
+      await handleGameGeneration(from, responseTo, text);
+    }
+    else {
       // Regular message - process with Gemini AI
       const aiReply = await getGeminiResponse(memory[from]);
       console.log(`Gemini Reply: ${aiReply}`);
@@ -158,52 +217,22 @@ async function handleButtonClick(from, responseTo, buttonId) {
   try {
     switch (buttonId) {
       case 'create_game':
-        // Handle Create Game action
-        await sendWhatsAppMessage(responseTo, `🎮 Creating your game... Please wait!`);
+        // Set user state to awaiting game description
+        setUserState(from, 'awaiting_game_description');
         
-        // Get the user's last message as game prompt
-        const userMessages = memory[from].filter(m => m.role === 'user' && !m.text.startsWith('['));
-        const gamePrompt = userMessages[userMessages.length - 1]?.text || 'a fun simple game';
-        
-        console.log(`Creating game based on: "${gamePrompt}"`);
-        
-        // Generate HTML5 game
-        const gameHtml = await generateGameHTML(gamePrompt);
-        
-        if (gameHtml) {
-          // Generate unique filename
-          const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          const gameFileName = `${gameId}.html`;
-          const gamePath = path.join(gamesFolder, gameFileName);
-          
-          // Save game file
-          fs.writeFileSync(gamePath, gameHtml);
-          
-          // Create game URL
-          const gameUrl = `${SERVER_URL}/games/${gameFileName}`;
-          
-          // Save to user's library
-          memory[from].push({ 
-            role: 'user', 
-            text: `[Created Game: ${gamePrompt}]` 
-          });
-          memory[from].push({ 
-            role: 'assistant', 
-            text: `Game created: ${gameUrl}`,
-            gameData: { id: gameId, prompt: gamePrompt, url: gameUrl, createdAt: new Date().toISOString() }
-          });
-          saveMemory(memory);
-          
-          // Send game link to user
-          await sendWhatsAppMessage(responseTo, 
-            `🎮 *Your game is ready!*\n\n` +
-            `📝 Based on: "${gamePrompt}"\n\n` +
-            `🔗 Play here:\n${gameUrl}\n\n` +
-            `Have fun! Send /start to create another game.`
-          );
-        } else {
-          await sendWhatsAppMessage(responseTo, `😔 Sorry, couldn't create the game. Please try again with a different description.`);
-        }
+        // Ask user for game description
+        await sendWhatsAppMessage(responseTo, 
+          `🎮 *Let's create your game!*\n\n` +
+          `Describe the game you want to play. Be creative!\n\n` +
+          `*Examples:*\n` +
+          `• "A space shooter where I dodge asteroids"\n` +
+          `• "Snake game with power-ups"\n` +
+          `• "Platform jumper with coins to collect"\n` +
+          `• "Flappy bird but underwater"\n` +
+          `• "Racing game with obstacles"\n\n` +
+          `📝 *Send your game idea now:*\n` +
+          `_(or type "cancel" to go back)_`
+        );
         break;
 
       case 'library':
@@ -216,7 +245,7 @@ async function handleButtonClick(from, responseTo, buttonId) {
           await sendWhatsAppMessage(responseTo, 
             `📚 *Your Library*\n\n` +
             `You haven't created any games yet!\n\n` +
-            `Send a game idea and then /start to create one.`
+            `Send /start to create your first game!`
           );
         } else {
           let libraryMsg = `📚 *Your Library* (${games.length} games)\n\n`;
@@ -237,94 +266,110 @@ async function handleButtonClick(from, responseTo, buttonId) {
   }
 }
 
+// ---- Handle Game Generation ----
+async function handleGameGeneration(from, responseTo, gamePrompt) {
+  const memory = loadMemory();
+  memory[from] = memory[from] || [];
+  
+  // Clear the awaiting state
+  clearUserState(from);
+  
+  // Send confirmation and generating message
+  await sendWhatsAppMessage(responseTo, 
+    `🎮 *Got it!*\n\n` +
+    `Creating: "${gamePrompt}"\n\n` +
+    `⏳ This takes 30-60 seconds for a high-quality game...\n` +
+    `Please wait while I build something awesome! 🚀`
+  );
+  
+  console.log(`Creating game based on: "${gamePrompt}"`);
+  
+  try {
+    // Generate HTML5 game
+    const gameHtml = await generateGameHTML(gamePrompt);
+    
+    if (gameHtml) {
+      // Generate unique filename
+      const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const gameFileName = `${gameId}.html`;
+      const gamePath = path.join(gamesFolder, gameFileName);
+      
+      // Save game file
+      fs.writeFileSync(gamePath, gameHtml);
+      
+      // Create game URL
+      const gameUrl = `${SERVER_URL}/games/${gameFileName}`;
+      
+      // Save to user's library
+      memory[from].push({ 
+        role: 'user', 
+        text: `[Created Game: ${gamePrompt}]` 
+      });
+      memory[from].push({ 
+        role: 'assistant', 
+        text: `Game created: ${gameUrl}`,
+        gameData: { id: gameId, prompt: gamePrompt, url: gameUrl, createdAt: new Date().toISOString() }
+      });
+      saveMemory(memory);
+      
+      // Send game link to user with tips
+      await sendWhatsAppMessage(responseTo, 
+        `🎮 *Your game is ready!*\n\n` +
+        `📝 "${gamePrompt}"\n\n` +
+        `🔗 *Play here:*\n${gameUrl}\n\n` +
+        `💡 *Tips:*\n` +
+        `• Tap ⛶ for fullscreen mode\n` +
+        `• Works on mobile & desktop\n` +
+        `• Touch controls on mobile, keyboard on desktop\n\n` +
+        `Send /start to create another game! 🎉`
+      );
+    } else {
+      await sendWhatsAppMessage(responseTo, 
+        `😔 *Oops!*\n\n` +
+        `Couldn't create that game. Please try:\n` +
+        `• A simpler game concept\n` +
+        `• More specific description\n\n` +
+        `Send /start to try again!`
+      );
+    }
+  } catch (err) {
+    console.error('Error in game generation:', err.response?.data || err.message);
+    await sendWhatsAppMessage(responseTo, 
+      `😔 *Something went wrong*\n\n` +
+      `Please send /start to try again.`
+    );
+  }
+}
+
 // ---- Generate HTML5 Game with Gemini ----
 async function generateGameHTML(gamePrompt) {
   try {
-    const systemPrompt = `You are an expert HTML5 game developer. Create a complete, self-contained HTML5 game based on the user's request.
-
-REQUIREMENTS:
-- Output ONLY the HTML code, no explanations or markdown
-- Must be a single HTML file with embedded CSS and JavaScript
-- Must be mobile-friendly (touch controls) and work on all screen sizes
-- Must be visually appealing with good colors and styling
-- Include a title, instructions, and game area
-- Add a "Play Again" button
-- Make it fun and engaging!
-- Use canvas or DOM-based game mechanics
-- Include score tracking if applicable
-
-The game should be based on: "${gamePrompt}"
-
-Output only the complete HTML code starting with <!DOCTYPE html> and ending with </html>.`;
-
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-      {
-        contents: [{ role: 'user', parts: [{ text: systemPrompt }] }],
-        generationConfig: {
-          maxOutputTokens: 8192,
-          temperature: 0.7
-        }
-      },
-      {
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
-
-    let gameCode = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    console.log(`Generating game for: "${gamePrompt}" (this may take 30-60 seconds)...`);
     
-    // Clean up the response - extract HTML if wrapped in markdown
-    if (gameCode.includes('```html')) {
-      gameCode = gameCode.split('```html')[1].split('```')[0];
-    } else if (gameCode.includes('```')) {
-      gameCode = gameCode.split('```')[1].split('```')[0];
-    }
-    
-    // Ensure it starts with DOCTYPE
-    gameCode = gameCode.trim();
-    if (!gameCode.toLowerCase().startsWith('<!doctype')) {
-      // Try to find the start of HTML
-      const doctypeIndex = gameCode.toLowerCase().indexOf('<!doctype');
-      if (doctypeIndex !== -1) {
-        gameCode = gameCode.substring(doctypeIndex);
-      }
-    }
+    const gameCode = await generateGameCode(gamePrompt);
     
     console.log(`Generated game HTML (${gameCode.length} chars)`);
     return gameCode;
 
   } catch (error) {
-    console.error("Game generation error:", error.response?.data || error.message);
+    console.error("Game generation error:", error.message);
     return null;
   }
 }
 
-// ---- Gemini Request (FIXED MODEL VERSION) ----
+// ---- Gemini Chat Response ----
+// Takes full conversation from memory.json and sends to Gemini service
 async function getGeminiResponse(conversation) {
   try {
-    const contents = conversation.map(msg => ({
-      // Your local 'assistant' role is correctly mapped to the API's 'model' role
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.text }]
-    }));
-
-    // *** FIX IS HERE: Changed 'gemini-pro' to 'gemini-1.0-pro' ***
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-      {
-        contents: contents,
-        generationConfig: {
-          maxOutputTokens: 1024  // Approximately 4096 characters
-        }
-      },
-      {
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
-
-    let responseText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response text found.";
+    // conversation comes from memory.json: [{role: 'user'|'assistant', text: string}, ...]
+    // Extract the last user message (new message) and use the rest as history
+    const lastMessage = conversation[conversation.length - 1];
+    const history = conversation.slice(0, -1);
     
-    // Ensure response doesn't exceed 4096 characters
+    // Pass history from memory.json to the Gemini service
+    let responseText = await sendChatMessage(history, lastMessage.text);
+    
+    // Ensure response doesn't exceed 4096 characters (WhatsApp limit)
     if (responseText.length > 4096) {
       responseText = responseText.substring(0, 4096);
     }
@@ -332,8 +377,7 @@ async function getGeminiResponse(conversation) {
     return responseText;
 
   } catch (error) {
-    // Note: The error details you provided (the 404) are logged here.
-    console.error("Gemini API Error details:", error.response?.data || error.message);
+    console.error("Gemini API Error:", error.message);
     return "Sorry, I am having trouble connecting to the AI right now.";
   }
 }
